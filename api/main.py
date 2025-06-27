@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+#from fastapi.middleware.cors import CORSMiddleware
 import os
 import logging
 import google.generativeai as genai
@@ -18,13 +18,13 @@ origins = [
     # يمكنك إضافة "http://localhost:3000" أو أي نطاق آخر تستخدمه للتطوير المحلي
 ]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True, # مهم إذا كنت سترسل ملفات تعريف الارتباط أو هيدر التخويل (مثل API Key)
-    allow_methods=["*"], # اسمح بجميع أساليب HTTP (POST, GET, إلخ)
-    allow_headers=["*"], # اسمح بجميع الرؤوس في الطلب
-)
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=origins,
+#     allow_credentials=True, # مهم إذا كنت سترسل ملفات تعريف الارتباط أو هيدر التخويل (مثل API Key)
+#     allow_methods=["*"], # اسمح بجميع أساليب HTTP (POST, GET, إلخ)
+#     allow_headers=["*"], # اسمح بجميع الرؤوس في الطلب
+# )
 
 # تحميل مفتاح Gemini API من المتغيرات البيئية
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
