@@ -9,7 +9,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://smilecare.vercel.app"],  # ✅ Replace with your actual frontend domain
+    allow_origins=["https://smilecare-dentals.vercel.app/"],  # ✅ Replace with your actual frontend domain
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
