@@ -4,5 +4,4 @@ requests
 uvicorn
 python-dotenv
 google-generativeai
-fastapi.middleware.cors
 logging
