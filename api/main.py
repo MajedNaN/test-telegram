@@ -75,3 +75,10 @@ async def chat(request: Request):
     except Exception as e:
         logging.error(f"Chat endpoint error: {e}")
         return {"reply": "فيه مشكلة حصلت، جرب تاني بعد شوية 🙏"}
+
+
+
+# نقطة نهاية اختبار بسيطة للتأكد من أن الخادم يعمل
+@app.get("/")
+async def read_root():
+    return {"message": "مرحبًا بك في SmileCare Dental Clinic API!"}
