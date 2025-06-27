@@ -4,50 +4,25 @@ import os
 import logging
 import google.generativeai as genai
 
-# قم بإعداد التسجيل لتتبع الأخطاء في سجلات Vercel
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 app = FastAPI()
 
-# قائمة النطاقات المسموح بها لـ CORS
-# تأكد من أن هذا يتطابق تمامًا مع نطاق الواجهة الأمامية الخاصة بك
-# من الأفضل تضمين كل من النسخة مع وبدون الشرطة المائلة الأخيرة
-origins = [
-    "https://smilecare-dentals.vercel.app",  # نطاق الواجهة الأمامية بدون الشرطة المائلة
-    "https://smilecare-dentals.vercel.app/", # نطاق الواجهة الأمامية مع الشرطة المائلة
-    # يمكنك إضافة "http://localhost:3000" أو أي نطاق آخر تستخدمه للتطوير المحلي
-]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["https://smilecare.vercel.app", "https://smilecare.vercel.app/"],  # ✅ Replace with your actual frontend domain
     allow_credentials=True, # مهم إذا كنت ترسل ملفات تعريف الارتباط أو هيدر التخويل
     allow_methods=["*"], # اسمح بجميع أساليب HTTP (POST, GET, إلخ)
     allow_headers=["*"], # اسمح بجميع الرؤوس في الطلب
+
 )
 
-# تحميل مفتاح Gemini API من المتغيرات البيئية
+
+# Load Gemini API Key
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
 if not GEMINI_API_KEY:
-    # استخدام logger.error بدلاً من raise ValueError للسماح للتطبيق بالبدء
-    # ولكن سيؤدي إلى فشل استدعاءات Gemini API
-    logger.error("خطأ: المتغير البيئي 'GEMINI_API_KEY' غير مضبوط. لن يعمل Gemini API.")
-    # يمكن أن تختار إنهاء التطبيق هنا إذا كان لا يمكن أن يعمل بدون المفتاح:
-    # import sys
-    # sys.exit(1)
+    raise ValueError("GEMINI_API_KEY not set in environment.")
 
-# إعداد Gemini API فقط إذا كان المفتاح موجوداً
-if GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        logger.info("تم تكوين Gemini API بنجاح.")
-    except Exception as e:
-        logger.error(f"خطأ في تكوين Gemini API: {e}")
-else:
-    logger.warning("لم يتم تكوين Gemini API بسبب عدم وجود مفتاح API.")
-
+genai.configure(api_key=GEMINI_API_KEY)
 
 DENTAL_CLINIC_SYSTEM_PROMPT = """
 إنت مساعد ذكي بتشتغل مع عيادة "سمايل كير للأسنان" في القاهرة. رد على الناس كأنك واحد مصري عادي، وبشكل مختصر ومباشر.
@@ -81,44 +56,22 @@ DENTAL_CLINIC_SYSTEM_PROMPT = """
 """
 
 def get_gemini_response(input_parts):
-    # تحقق مما إذا كان مفتاح API موجودًا قبل محاولة استخدام Gemini
-    if not GEMINI_API_KEY:
-        return "آسف، حصلت مشكلة داخلية (مفتاح API غير مضبوط). يرجى الاتصال بالعيادة."
-
     try:
         model = genai.GenerativeModel('gemini-2.0-flash')
         response = model.generate_content(input_parts)
-        # تحقق من أن الاستجابة تحتوي على نص
-        if response and response.text:
-            return response.text.strip()
-        else:
-            logger.warning("استجابة Gemini فارغة أو لا تحتوي على نص.")
-            return "آسف، استجابة غير متوقعة من المساعد. حاول تاني."
+        return response.text.strip()
     except Exception as e:
-        logger.error(f"خطأ في استدعاء Gemini API: {e}")
-        return "آسف، حصلت مشكلة في الاتصال بالمساعد. حاول تاني أو كلم العيادة على +20 2 1234-5678"
+        logging.error(f"Gemini error: {e}")
+        return "آسف، حصلت مشكلة. حاول تاني أو كلم العيادة على +20 2 1234-5678"
 
 @app.post("/api/chat")
 async def chat(request: Request):
     try:
         data = await request.json()
         user_input = data.get("message", "")
-        if not user_input:
-            return {"reply": "ياريت تكتب رسالة عشان أقدر أساعدك يا فندم."}
-
-        logger.info(f"تم استلام رسالة المستخدم: {user_input}")
-        
         gemini_input = [DENTAL_CLINIC_SYSTEM_PROMPT, f"User: \"{user_input}\""]
         reply = get_gemini_response(gemini_input)
-        
-        logger.info(f"استجابة Gemini: {reply}")
         return {"reply": reply}
     except Exception as e:
-        logger.error(f"خطأ في نقطة نهاية المحادثة (API chat): {e}")
-        return {"reply": "فيه مشكلة حصلت، جرب تاني بعد شوية �"}
-
-# نقطة نهاية اختبار بسيطة للتأكد من أن الخادم يعمل
-@app.get("/")
-async def read_root():
-    return {"message": "مرحبًا بك في SmileCare Dental Clinic API!"}
-�
+        logging.error(f"Chat endpoint error: {e}")
+        return {"reply": "فيه مشكلة حصلت، جرب تاني بعد شوية 🙏"}
