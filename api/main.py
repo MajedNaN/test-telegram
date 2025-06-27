@@ -1,50 +1,53 @@
-
-
-
-
-
-
-
-###### SET Webhook for telegram
-######   https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/setWebhook?url=https://your-deployed-app-url.com/webhook
-
-
-
-
-
-
-
-
-
-
-
-
-from fastapi import FastAPI, Request, HTTPException
-import requests
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 import os
-import google.generativeai as genai
 import logging
+import google.generativeai as genai
+
+# إعداد التسجيل لتتبع الأخطاء في سجلات Vercel
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# --- Configuration ---
-# Load environment variables. Make sure these are set in your Vercel project settings.
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# قائمة النطاقات المسموح بها لـ CORS (تأكد من مطابقتها لنطاق موقع الودجت)
+# من الأفضل تضمين كل من النسخة مع وبدون الشرطة المائلة الأخيرة
+origins = [
+    "https://smilecare-dentals.vercel.app",  # نطاق الواجهة الأمامية بدون الشرطة المائلة
+    "https://smilecare-dentals.vercel.app/", # نطاق الواجهة الأمامية مع الشرطة المائلة
+    # يمكنك إضافة "http://localhost:3000" أو أي نطاق آخر تستخدمه للتطوير المحلي
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True, # مهم إذا كنت سترسل ملفات تعريف الارتباط أو هيدر التخويل (مثل API Key)
+    allow_methods=["*"], # اسمح بجميع أساليب HTTP (POST, GET, إلخ)
+    allow_headers=["*"], # اسمح بجميع الرؤوس في الطلب
+)
+
+# تحميل مفتاح Gemini API من المتغيرات البيئية
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# تحقق مما إذا كان مفتاح API موجوداً
+if not GEMINI_API_KEY:
+    logger.error("خطأ: المتغير البيئي 'GEMINI_API_KEY' غير مضبوط. لن يعمل Gemini API.")
+    # يمكنك اختيار إنهاء التطبيق هنا إذا كان لا يمكن أن يعمل بدون المفتاح:
+    # import sys
+    # sys.exit(1)
 
-# Check if all environment variables are loaded
-if not all([TELEGRAM_BOT_TOKEN, GEMINI_API_KEY]):
-    logging.error("Missing one or more required environment variables.")
-    raise ValueError("Missing one or more required environment variables (TELEGRAM_BOT_TOKEN, GEMINI_API_KEY).")
+# إعداد Gemini API فقط إذا كان المفتاح موجوداً
+if GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        logger.info("تم تكوين Gemini API بنجاح.")
+    except Exception as e:
+        logger.error(f"خطأ في تكوين Gemini API: {e}", exc_info=True)
+else:
+    logger.warning("لم يتم تكوين Gemini API بسبب عدم وجود مفتاح API.")
 
-# --- Configure Google Gemini API ---
-genai.configure(api_key=GEMINI_API_KEY)
 
-# --- System Prompt for the Dental Clinic ---
-# This prompt tells Gemini how to act. It's the "brain" of your chatbot.
+# التعليمات البرمجية الأساسية لنظام الدردشة
 DENTAL_CLINIC_SYSTEM_PROMPT = """
 إنت مساعد ذكي بتشتغل مع عيادة "سمايل كير للأسنان" في القاهرة. رد على الناس كأنك واحد مصري عادي، وبشكل مختصر ومباشر.
 
@@ -52,7 +55,7 @@ DENTAL_CLINIC_SYSTEM_PROMPT = """
 1. **اتكلم بالمصري وبس**: استخدم لهجة مصرية طبيعية، زي "إزيك"، "عامل إيه"، "تحت أمرك"، "يا فندم"، "بص يا باشا"، وكده. خليك خفيف وودود.
 2. **إنت مش بتاخد مواعيد**: قول للناس إنك مساعد ذكي ومبتحجزش بنفسك، لكن ممكن تساعدهم بمعلومة أو ترشدهم. لو حد سأل عن الحجز، قوله يتصل بالعيادة على +20 2 1234-5678.
 3. **الخدمات والأسعار**: لو حد سأل عن حاجة، رد بالمعلومة من اللي تحت، بس دايمًا وضّح إن الأسعار تقريبية وممكن تختلف حسب الحالة.
-4. **الرسائل الصوتية**: لو جاتلك ڤويس، اسمعه، افهم الشخص عايز إيه، ورد عليه كتابة بنفس الطريقة دي.
+4. **الرسائل الصوتية**: لم نعد ندعم الرسائل الصوتية في هذا الاندماج. إذا جاءت رسالة صوتية، اطلب من المستخدم أن يرسل رسالة نصية بدلاً من ذلك.
 5. **خليك مختصر على قد ما تقدر**: جاوب بسرعة وادخل في الموضوع، من غير لف ودوران.
 
 **معلومات العيادة:**
@@ -76,148 +79,67 @@ DENTAL_CLINIC_SYSTEM_PROMPT = """
 - لو حد قال "شكراً" أو حاجة شبه كده، رد عليه رد بسيط ولطيف.
 """
 
-
-# --- FastAPI Webhook Endpoints ---
-
-@app.get("/")
-def health_check():
-    """Simple health check endpoint."""
-    logging.info("Health check requested.")
-    return {"status": "OK", "message": "Telegram Bot is running."}
-
-@app.post("/webhook")
-async def handle_telegram_webhook(request: Request):
+# دالة مساعدة للحصول على استجابة من Gemini
+def get_gemini_response(user_input: str):
     """
-    Handles incoming updates from Telegram.
-    This endpoint receives all messages, including text and voice notes.
+    تُولد استجابة من Gemini بناءً على مدخل المستخدم النصي.
     """
-    data = await request.json()
-    logging.info(f"Received Telegram webhook: {data}")
-
-    if "message" not in data:
-        logging.warning("No message object in the update. Skipping.")
-        return {"status": "ok"}
-
-    message = data["message"]
-    chat_id = message["chat"]["id"]
-    msg_type = None
-    
-    gemini_input = []
+    # تحقق مما إذا كان مفتاح API موجوداً قبل محاولة استخدام Gemini
+    if not GEMINI_API_KEY:
+        logger.error("مفتاح GEMINI_API_KEY غير مضبوط، لا يمكن استدعاء Gemini API.")
+        return "آسف، حصلت مشكلة داخلية (مفتاح API غير مضبوط). يرجى الاتصال بالعيادة."
 
     try:
-        if "text" in message:
-            msg_type = "text"
-            user_text = message["text"]
-            logging.info(f"Received text message from {chat_id}: {user_text}")
-            gemini_input = [
-                DENTAL_CLINIC_SYSTEM_PROMPT,
-                f"User message: \"{user_text}\""
-            ]
-        elif "voice" in message:
-            msg_type = "voice"
-            voice_file_id = message["voice"]["file_id"]
-            mime_type = message["voice"]["mime_type"]
-            logging.info(f"Received voice message from {chat_id}, file_id: {voice_file_id}")
-
-            audio_bytes = await get_telegram_audio_bytes(voice_file_id)
-
-            if audio_bytes:
-                gemini_input = [
-                    DENTAL_CLINIC_SYSTEM_PROMPT,
-                    "The user sent a voice note. Transcribe it, understand the request, and answer in Egyptian Arabic based on the clinic's information. Make the response concise.",
-                    {"mime_type": mime_type, "data": audio_bytes}
-                ]
-            else:
-                await send_telegram_message(chat_id, "معلش، مقدرتش أسمع الرسالة الصوتية. ممكن تبعتها تاني أو تكتب سؤالك؟")
-                return {"status": "ok"}
-        else:
-            # Handle other message types if needed, or simply ignore
-            logging.info(f"Received unsupported message type: {message.keys()}. Skipping.")
-            await send_telegram_message(chat_id, "أنا أسف، أنا بفهم الرسائل النصية والصوتية بس.")
-            return {"status": "ok"}
-        
-        if gemini_input:
-            response_text = get_gemini_response(gemini_input)
-            await send_telegram_message(chat_id, response_text)
-
-    except Exception as e:
-        logging.error(f"Error handling Telegram webhook for chat_id {chat_id}: {e}", exc_info=True)
-        await send_telegram_message(chat_id, "آسف، حصل مشكلة عندي. ممكن تكلم العيادة على طول على الرقم ده: +20 2 1234-5678")
-
-    return {"status": "ok"}
-
-# --- Helper Functions for Telegram API ---
-
-async def get_telegram_audio_bytes(file_id: str):
-    """
-    Fetches audio file from Telegram and returns its bytes.
-    Telegram requires two steps: get file path, then download file.
-    """
-    # Step 1: Get file path
-    get_file_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile"
-    try:
-        response = requests.get(get_file_url, params={"file_id": file_id})
-        response.raise_for_status()
-        file_info = response.json()
-        
-        if not file_info.get("ok"):
-            logging.error(f"Telegram getFile API error: {file_info.get('description', 'Unknown error')}")
-            return None
-
-        file_path = file_info["result"]["file_path"]
-        logging.info(f"Retrieved file path from Telegram: {file_path}")
-
-        # Step 2: Download the actual audio file
-        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
-        audio_response = requests.get(download_url)
-        audio_response.raise_for_status()
-
-        logging.info(f"Successfully downloaded audio from Telegram: {len(audio_response.content)} bytes")
-        return audio_response.content
-    
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error communicating with Telegram API for file_id {file_id}: {e}")
-        return None
-    except Exception as e:
-        logging.error(f"Unexpected error in get_telegram_audio_bytes for file_id {file_id}: {e}", exc_info=True)
-        return None
-
-async def send_telegram_message(chat_id: int, message_text: str):
-    """ Sends a text message back to the user on Telegram """
-    send_message_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message_text
-    }
-    
-    try:
-        response = requests.post(send_message_url, json=payload)
-        response.raise_for_status()
-        logging.info(f"Message sent to Telegram chat_id {chat_id}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error sending message to Telegram chat_id {chat_id}: {e}")
-        logging.error(f"Telegram API Response Body: {response.text if response else 'No response'}")
-    except Exception as e:
-        logging.error(f"Unexpected error in send_telegram_message for chat_id {chat_id}: {e}", exc_info=True)
-
-
-# --- Helper Functions for Gemini (remains largely the same) ---
-
-def get_gemini_response(input_parts: list):
-    """
-    Generates a response from Gemini using the provided input parts (text and/or audio).
-    """
-    try:
-        # We use gemini-1.5-flash because it's fast and supports audio input.
         model = genai.GenerativeModel('gemini-2.0-flash')
         
-        # Generate the content
-        response = model.generate_content(input_parts)
+        # إنشاء مدخل Gemini مع رسالة المستخدم ونظام المساعد
+        gemini_input_parts = [
+            DENTAL_CLINIC_SYSTEM_PROMPT,
+            f"User: \"{user_input}\""
+        ]
         
-        # Clean up the response to ensure it's a single block of text
-        return response.text.strip()
+        response = model.generate_content(gemini_input_parts)
+        
+        # تحقق من أن الاستجابة تحتوي على نص
+        if response and response.text:
+            return response.text.strip()
+        else:
+            logger.warning("استجابة Gemini فارغة أو لا تحتوي على نص.")
+            return "آسف، استجابة غير متوقعة من المساعد. حاول تاني."
+            
+    except Exception as e:
+        logger.error(f"خطأ في استدعاء Gemini API: {e}", exc_info=True)
+        return "آسف، حصلت مشكلة في الاتصال بالمساعد. حاول تاني أو كلم العيادة على +20 2 1234-5678"
+
+# نقطة نهاية فحص الصحة
+@app.get("/")
+def health_check():
+    """نقطة نهاية بسيطة للتحقق من أن الـ API يعمل."""
+    logger.info("تم تلقي طلب فحص الصحة.")
+    return {"status": "OK", "message": "API الودجت يعمل بشكل جيد."}
+
+# نقطة نهاية الدردشة للودجت
+@app.post("/api/chat")
+async def chat(request: Request):
+    """
+    تتعامل مع رسائل الدردشة الواردة من الودجت.
+    """
+    try:
+        data = await request.json()
+        user_input = data.get("message", "")
+        
+        if not user_input:
+            logger.warning("تم استلام رسالة فارغة من الودجت.")
+            return {"reply": "ياريت تكتب رسالة عشان أقدر أساعدك يا فندم."}
+
+        logger.info(f"تم استلام رسالة المستخدم من الودجت: {user_input}")
+        
+        # الحصول على الاستجابة من Gemini
+        reply = get_gemini_response(user_input)
+        
+        logger.info(f"استجابة Gemini للودجت: {reply}")
+        return {"reply": reply}
         
     except Exception as e:
-        logging.error(f"Error getting Gemini response: {e}", exc_info=True)
-        return "آسف، حصل مشكلة عندي. ممكن تكلم العيادة على طول على الرقم ده: +20 2 1234-5678"
-
+        logger.error(f"خطأ في نقطة نهاية المحادثة (API chat): {e}", exc_info=True)
+        return {"reply": "فيه مشكلة حصلت، جرب تاني بعد شوية �"}
