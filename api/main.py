@@ -78,7 +78,3 @@ async def chat(request: Request):
 
 
 
-# نقطة نهاية اختبار بسيطة للتأكد من أن الخادم يعمل
-@app.get("/")
-async def read_root():
-    return {"message": "مرحبًا بك في SmileCare Dental Clinic API!"}
