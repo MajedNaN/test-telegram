@@ -17,7 +17,7 @@ async def command_start_handler(message: Message) -> None:
     await message.answer("Hello! I'm a bot created with aiogram on Vercel.")
 
 
-@app.post("webhook")
+@app.post("/webhook")
 async def telegram_webhook(req: Request):
     data = await req.json()
     update = Update.model_validate(data)
