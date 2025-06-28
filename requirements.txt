@@ -1,5 +1,4 @@
 aiogram
 google-generativeai
-aiohttp
 fastapi
 uvicorn
