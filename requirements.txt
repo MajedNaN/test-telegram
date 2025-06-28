@@ -1,7 +1,5 @@
 fastapi
-httpx
-requests
 uvicorn
-python-dotenv
+aiogram
 google-generativeai
-
+httpx
