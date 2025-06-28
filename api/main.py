@@ -19,205 +19,105 @@
 
 
 
-from fastapi import FastAPI, Request, HTTPException
-import requests
-import os
+from fastapi import FastAPI, Request
+from aigram import Dispatcher, Bot, Router
+from aigram.types import Update, Message
+from aigram.webhook import AiohttpWebhook
 import google.generativeai as genai
+import os
 import logging
+import httpx
 
-app = FastAPI()
+# --- Logging ---
+logging.basicConfig(level=logging.INFO)
 
-# --- Configuration ---
-# Load environment variables. Make sure these are set in your Vercel project settings.
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+# --- Load environment variables ---
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+if not BOT_TOKEN or not GEMINI_API_KEY:
+    raise ValueError("Missing TELEGRAM_BOT_TOKEN or GEMINI_API_KEY.")
 
-# Check if all environment variables are loaded
-if not all([TELEGRAM_BOT_TOKEN, GEMINI_API_KEY]):
-    logging.error("Missing one or more required environment variables.")
-    raise ValueError("Missing one or more required environment variables (TELEGRAM_BOT_TOKEN, GEMINI_API_KEY).")
-
-# --- Configure Google Gemini API ---
+# --- Gemini Configuration ---
 genai.configure(api_key=GEMINI_API_KEY)
 
-# --- System Prompt for the Dental Clinic ---
-# This prompt tells Gemini how to act. It's the "brain" of your chatbot.
-DENTAL_CLINIC_SYSTEM_PROMPT = """
-إنت مساعد ذكي تتعامل مع الناس بطريقة مضحكة ولطيفة تجعل الناس يضحكون من كلامك بتشتغل مع عيادة "سمايل كير للأسنان" في القاهرة. رد على الناس كأنك واحد مصري عادي، وبشكل مختصر ومباشر.
+# --- App and Bot Setup ---
+app = FastAPI()
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher()
+router = Router()
+webhook = AiohttpWebhook(bot)
 
-**قواعد مهمة:**
-1. **اتكلم بالمصري وبس**: استخدم لهجة مصرية طبيعية، زي "إزيك"، "عامل إيه"، "تحت أمرك"، "يا فندم"، "بص يا باشا"، وكده. خليك خفيف وودود.
-2. **إنت مش بتاخد مواعيد**: قول للناس إنك مساعد ذكي ومبتحجزش بنفسك، لكن ممكن تساعدهم بمعلومة أو ترشدهم. لو حد سأل عن الحجز، قوله يتصل بالعيادة على +20 2 1234-5678.
-3. **الخدمات والأسعار**: لو حد سأل عن حاجة، رد بالمعلومة من اللي تحت، بس دايمًا وضّح إن الأسعار تقريبية وممكن تختلف حسب الحالة.
-4. **الرسائل الصوتية**: لو جاتلك ڤويس، اسمعه، افهم الشخص عايز إيه، ورد عليه كتابة بنفس الطريقة دي.
-5. **خليك مختصر على قد ما تقدر**: جاوب بسرعة وادخل في الموضوع، من غير لف ودوران.
-
-**معلومات العيادة:**
-- الاسم: عيادة سمايل كير للأسنان
-- العنوان: القاهرة، مصر
-- التليفون (للحجز والطوارئ): +20 2 1234-5678
-- المواعيد: السبت لـ الخميس (9ص - 8م)، الجمعة (2م - 8م)
-
-**الخدمات والأسعار (جنيه مصري تقريبًا):**
-- الكشف: 300
-- تنظيف الأسنان: 500
-- حشو سن: من 400
-- علاج عصب: من 1500
-- خلع سن: من 600
-- زراعة سن: من 8000
-- تبييض الأسنان: 2500
-
-**ملاحظات:**
-- متكررش نفس الجملة أو المقدمة في كل رد. خليك طبيعي ومتغير.
-- لو مش فاهم الرسالة، اسأل الشخص يوضح أكتر.
-- لو حد قال "شكراً" أو حاجة شبه كده، رد عليه رد بسيط ولطيف.
+# --- System Prompt ---
+SYSTEM_PROMPT = """
+إنت مساعد ذكي تتعامل مع الناس بطريقة مضحكة ...
+(استخدم النص الكامل هنا، تم تقصيره لأغراض العرض)
 """
 
-
-# --- FastAPI Webhook Endpoints ---
-
-@app.get("/")
-def health_check():
-    """Simple health check endpoint."""
-    logging.info("Health check requested.")
-    return {"status": "OK", "message": "Telegram Bot is running."}
-
-@app.post("/webhook")
-async def handle_telegram_webhook(request: Request):
-    """
-    Handles incoming updates from Telegram.
-    This endpoint receives all messages, including text and voice notes.
-    """
-    data = await request.json()
-    logging.info(f"Received Telegram webhook: {data}")
-
-    if "message" not in data:
-        logging.warning("No message object in the update. Skipping.")
-        return {"status": "ok"}
-
-    message = data["message"]
-    chat_id = message["chat"]["id"]
-    msg_type = None
-    
-    gemini_input = []
-
+# --- Gemini Interaction ---
+async def get_gemini_response(parts):
     try:
-        if "text" in message:
-            msg_type = "text"
-            user_text = message["text"]
-            logging.info(f"Received text message from {chat_id}: {user_text}")
-            gemini_input = [
-                DENTAL_CLINIC_SYSTEM_PROMPT,
-                f"User message: \"{user_text}\""
-            ]
-        elif "voice" in message:
-            msg_type = "voice"
-            voice_file_id = message["voice"]["file_id"]
-            mime_type = message["voice"]["mime_type"]
-            logging.info(f"Received voice message from {chat_id}, file_id: {voice_file_id}")
-
-            audio_bytes = await get_telegram_audio_bytes(voice_file_id)
-
-            if audio_bytes:
-                gemini_input = [
-                    DENTAL_CLINIC_SYSTEM_PROMPT,
-                    "The user sent a voice note. Transcribe it, understand the request, and answer in Egyptian Arabic based on the clinic's information. Make the response concise.",
-                    {"mime_type": mime_type, "data": audio_bytes}
-                ]
-            else:
-                await send_telegram_message(chat_id, "معلش، مقدرتش أسمع الرسالة الصوتية. ممكن تبعتها تاني أو تكتب سؤالك؟")
-                return {"status": "ok"}
-        else:
-            # Handle other message types if needed, or simply ignore
-            logging.info(f"Received unsupported message type: {message.keys()}. Skipping.")
-            await send_telegram_message(chat_id, "أنا أسف، أنا بفهم الرسائل النصية والصوتية بس.")
-            return {"status": "ok"}
-        
-        if gemini_input:
-            response_text = get_gemini_response(gemini_input)
-            await send_telegram_message(chat_id, response_text)
-
-    except Exception as e:
-        logging.error(f"Error handling Telegram webhook for chat_id {chat_id}: {e}", exc_info=True)
-        await send_telegram_message(chat_id, "آسف، حصل مشكلة عندي. ممكن تكلم العيادة على طول على الرقم ده: +20 2 1234-5678")
-
-    return {"status": "ok"}
-
-# --- Helper Functions for Telegram API ---
-
-async def get_telegram_audio_bytes(file_id: str):
-    """
-    Fetches audio file from Telegram and returns its bytes.
-    Telegram requires two steps: get file path, then download file.
-    """
-    # Step 1: Get file path
-    get_file_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile"
-    try:
-        response = requests.get(get_file_url, params={"file_id": file_id})
-        response.raise_for_status()
-        file_info = response.json()
-        
-        if not file_info.get("ok"):
-            logging.error(f"Telegram getFile API error: {file_info.get('description', 'Unknown error')}")
-            return None
-
-        file_path = file_info["result"]["file_path"]
-        logging.info(f"Retrieved file path from Telegram: {file_path}")
-
-        # Step 2: Download the actual audio file
-        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
-        audio_response = requests.get(download_url)
-        audio_response.raise_for_status()
-
-        logging.info(f"Successfully downloaded audio from Telegram: {len(audio_response.content)} bytes")
-        return audio_response.content
-    
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error communicating with Telegram API for file_id {file_id}: {e}")
-        return None
-    except Exception as e:
-        logging.error(f"Unexpected error in get_telegram_audio_bytes for file_id {file_id}: {e}", exc_info=True)
-        return None
-
-async def send_telegram_message(chat_id: int, message_text: str):
-    """ Sends a text message back to the user on Telegram """
-    send_message_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": message_text
-    }
-    
-    try:
-        response = requests.post(send_message_url, json=payload)
-        response.raise_for_status()
-        logging.info(f"Message sent to Telegram chat_id {chat_id}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error sending message to Telegram chat_id {chat_id}: {e}")
-        logging.error(f"Telegram API Response Body: {response.text if response else 'No response'}")
-    except Exception as e:
-        logging.error(f"Unexpected error in send_telegram_message for chat_id {chat_id}: {e}", exc_info=True)
-
-
-# --- Helper Functions for Gemini (remains largely the same) ---
-
-def get_gemini_response(input_parts: list):
-    """
-    Generates a response from Gemini using the provided input parts (text and/or audio).
-    """
-    try:
-        # We use gemini-1.5-flash because it's fast and supports audio input.
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        
-        # Generate the content
-        response = model.generate_content(input_parts)
-        
-        # Clean up the response to ensure it's a single block of text
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        response = await model.generate_content_async(parts)
         return response.text.strip()
-        
     except Exception as e:
-        logging.error(f"Error getting Gemini response: {e}", exc_info=True)
-        return "آسف، حصل مشكلة عندي. ممكن تكلم العيادة على طول على الرقم ده: +20 2 1234-5678"
+        logging.error(f"Gemini Error: {e}", exc_info=True)
+        return "آسف، حصل مشكلة عندي. كلم العيادة على +20 2 1234-5678."
+
+# --- Handlers ---
+@router.message()
+async def handle_message(msg: Message):
+    chat_id = msg.chat.id
+
+    if msg.text:
+        user_input = msg.text
+        logging.info(f"Text from {chat_id}: {user_input}")
+        parts = [SYSTEM_PROMPT, f"User message: \"{user_input}\""]
+        reply = await get_gemini_response(parts)
+        await msg.answer(reply)
+
+    elif msg.voice:
+        file_id = msg.voice.file_id
+        logging.info(f"Voice from {chat_id}: {file_id}")
+
+        try:
+            file = await bot.get_file(file_id)
+            voice_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(voice_url)
+                resp.raise_for_status()
+                audio_bytes = resp.content
+
+            mime_type = "audio/ogg"  # Telegram voice mime
+            parts = [
+                SYSTEM_PROMPT,
+                "اليوزر بعت ڤويس. اسمعه، افهم هو عايز إيه، ورد عليه بالمصري.",
+                {"mime_type": mime_type, "data": audio_bytes}
+            ]
+            reply = await get_gemini_response(parts)
+            await msg.answer(reply)
+
+        except Exception as e:
+            logging.error(f"Error handling voice: {e}")
+            await msg.answer("مقدرتش أسمع الرسالة. ممكن تبعتها تاني أو تكتبها؟")
+
+    else:
+        await msg.answer("أنا بفهم النصوص والڤويس بس ❤️")
+
+# --- Health Check ---
+@app.get("/")
+async def health():
+    return {"status": "OK", "message": "Telegram bot is up and running"}
+
+# --- Webhook ---
+@app.post("/webhook")
+async def telegram_webhook(req: Request):
+    body = await req.body()
+    update = Update.model_validate_json(body)
+    await dp.feed_update(bot, update)
+    return {"ok": True}
+
+# --- Start Dispatcher ---
+dp.include_router(router)
 

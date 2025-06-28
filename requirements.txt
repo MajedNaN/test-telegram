@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-aiogram
-google-generativeai
+aigram
 httpx
-requests
+google-generativeai
