@@ -1,3 +1,24 @@
+
+
+
+
+
+
+
+###### SET Webhook for telegram
+######   https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/setWebhook?url=https://your-deployed-app-url.com/webhook
+
+
+
+
+
+
+
+
+
+
+
+
 from fastapi import FastAPI, Request, HTTPException
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message, Audio
@@ -6,26 +27,21 @@ import httpx # Asynchronous HTTP client
 import os
 import google.generativeai as genai
 import logging
-import asyncio
+import asyncio # Make sure this is imported
 
 # --- Configuration ---
-# Load environment variables. Make sure these are set in your Vercel project settings.
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Check if all environment variables are loaded
 if not all([TELEGRAM_BOT_TOKEN, GEMINI_API_KEY]):
     logging.error("Missing one or more required environment variables.")
     raise ValueError("Missing one or more required environment variables (TELEGRAM_BOT_TOKEN, GEMINI_API_KEY).")
 
-# --- Configure Google Gemini API ---
 genai.configure(api_key=GEMINI_API_KEY)
 
 # --- System Prompt for the Dental Clinic ---
-# This prompt tells Gemini how to act. It's the "brain" of your chatbot.
 DENTAL_CLINIC_SYSTEM_PROMPT = """
 إنت مساعد ذكي تتعامل مع الناس بطريقة مضحكة ولطيفة تجعل الناس يضحكون من كلامك بتشتغل مع عيادة "سمايل كير للأسنان" في القاهرة. رد على الناس كأنك واحد مصري عادي، وبشكل مختصر ومباشر.
 
@@ -94,12 +110,12 @@ async def handle_text_message(message: Message):
     Handles incoming text messages.
     """
     logging.info(f"Received text message from {message.chat.id}: {message.text}")
-    
+
     gemini_input = [
         DENTAL_CLINIC_SYSTEM_PROMPT,
         f"User message: \"{message.text}\""
     ]
-    
+
     response_text = await get_gemini_response_async(gemini_input)
     await message.reply(response_text)
 
@@ -111,11 +127,9 @@ async def handle_voice_message(message: Message):
     logging.info(f"Received voice message from {message.chat.id}, file_id: {message.voice.file_id}")
 
     try:
-        # Get file information from Telegram
         file_info = await bot.get_file(message.voice.file_id)
         file_path = file_info.file_path
 
-        # Download the voice file using httpx
         async with httpx.AsyncClient() as client:
             voice_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
             response = await client.get(voice_url)
@@ -160,9 +174,14 @@ async def health_check():
 async def handle_telegram_webhook_fastapi(request: Request):
     """
     Handles incoming updates from Telegram via webhook for FastAPI.
-    Passes the update to aiogram's dispatcher.
+    Passes the update to aiogram's dispatcher without waiting for it to finish.
     """
     update = types.Update.model_validate(await request.json(), context={"bot": bot})
     logging.info(f"Received Telegram webhook via FastAPI.")
-    await dp.feed_update(bot, update)
-    return {"status": "ok"}
+
+    # IMPORTANT: Run dp.feed_update as a background task
+    # This allows FastAPI to return a 200 OK immediately to Telegram,
+    # preventing timeouts, while aiogram processes the update.
+    asyncio.create_task(dp.feed_update(bot, update))
+
+    return {"status": "ok"} # Immediate response to Telegram
