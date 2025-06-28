@@ -2,31 +2,27 @@
 ######   https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/setWebhook?url=https://your-deployed-app-url.com/webhook
 
 from fastapi import FastAPI, Request, HTTPException
-import httpx # Import httpx for async HTTP requests
+import httpx
 import os
 import google.generativeai as genai
 import logging
+import asyncio # Import asyncio for to_thread
 
 app = FastAPI()
 
 # --- Configuration ---
-# Load environment variables. Make sure these are set in your Vercel project settings.
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Check if all environment variables are loaded
 if not all([TELEGRAM_BOT_TOKEN, GEMINI_API_KEY]):
     logging.error("Missing one or more required environment variables.")
     raise ValueError("Missing one or more required environment variables (TELEGRAM_BOT_TOKEN, GEMINI_API_KEY).")
 
-# --- Configure Google Gemini API ---
 genai.configure(api_key=GEMINI_API_KEY)
 
 # --- System Prompt for the Dental Clinic ---
-# This prompt tells Gemini how to act. It's the "brain" of your chatbot.
 DENTAL_CLINIC_SYSTEM_PROMPT = """
 إنت مساعد ذكي تتعامل مع الناس بطريقة مضحكة ولطيفة تجعل الناس يضحكون من كلامك بتشتغل مع عيادة "سمايل كير للأسنان" في القاهرة. رد على الناس كأنك واحد مصري عادي، وبشكل مختصر ومباشر.
 
@@ -58,11 +54,25 @@ DENTAL_CLINIC_SYSTEM_PROMPT = """
 - لو حد قال "شكراً" أو حاجة شبه كده، رد عليه رد بسيط ولطيف.
 """
 
-# Initialize httpx client for reuse
-# Using a global client or an async context manager for httpx is best practice
-# to efficiently manage connections.
-httpx_client = httpx.AsyncClient()
+# Initialize httpx client outside the request-handling functions
+# This client will be reused across all requests.
+# It's better to manage its lifecycle with FastAPI's lifespan events.
+telegram_httpx_client: httpx.AsyncClient = None
 
+@app.on_event("startup")
+async def startup_event():
+    """Event that runs when the FastAPI application starts."""
+    global telegram_httpx_client
+    telegram_httpx_client = httpx.AsyncClient()
+    logging.info("httpx.AsyncClient initialized.")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Event that runs when the FastAPI application shuts down."""
+    global telegram_httpx_client
+    if telegram_httpx_client:
+        await telegram_httpx_client.aclose()
+        logging.info("httpx.AsyncClient closed.")
 
 # --- FastAPI Webhook Endpoints ---
 
@@ -87,13 +97,11 @@ async def handle_telegram_webhook(request: Request):
 
     message = data["message"]
     chat_id = message["chat"]["id"]
-    msg_type = None
     
     gemini_input = []
 
     try:
         if "text" in message:
-            msg_type = "text"
             user_text = message["text"]
             logging.info(f"Received text message from {chat_id}: {user_text}")
             gemini_input = [
@@ -101,7 +109,6 @@ async def handle_telegram_webhook(request: Request):
                 f"User message: \"{user_text}\""
             ]
         elif "voice" in message:
-            msg_type = "voice"
             voice_file_id = message["voice"]["file_id"]
             mime_type = message["voice"]["mime_type"]
             logging.info(f"Received voice message from {chat_id}, file_id: {voice_file_id}")
@@ -118,13 +125,13 @@ async def handle_telegram_webhook(request: Request):
                 await send_telegram_message(chat_id, "معلش، مقدرتش أسمع الرسالة الصوتية. ممكن تبعتها تاني أو تكتب سؤالك؟")
                 return {"status": "ok"}
         else:
-            # Handle other message types if needed, or simply ignore
             logging.info(f"Received unsupported message type: {message.keys()}. Skipping.")
             await send_telegram_message(chat_id, "أنا أسف، أنا بفهم الرسائل النصية والصوتية بس.")
             return {"status": "ok"}
         
         if gemini_input:
-            response_text = get_gemini_response(gemini_input) # This still uses a sync library
+            # Run the synchronous get_gemini_response in a separate thread pool
+            response_text = await asyncio.to_thread(get_gemini_response, gemini_input)
             await send_telegram_message(chat_id, response_text)
 
     except Exception as e:
@@ -140,30 +147,27 @@ async def get_telegram_audio_bytes(file_id: str):
     Fetches audio file from Telegram and returns its bytes.
     Telegram requires two steps: get file path, then download file.
     """
-    # Step 1: Get file path
     get_file_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile"
     try:
-        async with httpx_client as client: # Use the async client
-            response = await client.get(get_file_url, params={"file_id": file_id})
-            response.raise_for_status()
-            file_info = response.json()
-            
-            if not file_info.get("ok"):
-                logging.error(f"Telegram getFile API error: {file_info.get('description', 'Unknown error')}")
-                return None
+        response = await telegram_httpx_client.get(get_file_url, params={"file_id": file_id})
+        response.raise_for_status()
+        file_info = response.json()
+        
+        if not file_info.get("ok"):
+            logging.error(f"Telegram getFile API error: {file_info.get('description', 'Unknown error')}")
+            return None
 
-            file_path = file_info["result"]["file_path"]
-            logging.info(f"Retrieved file path from Telegram: {file_path}")
+        file_path = file_info["result"]["file_path"]
+        logging.info(f"Retrieved file path from Telegram: {file_path}")
 
-            # Step 2: Download the actual audio file
-            download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
-            audio_response = await client.get(download_url) # Use the async client
-            audio_response.raise_for_status()
+        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+        audio_response = await telegram_httpx_client.get(download_url)
+        audio_response.raise_for_status()
 
-            logging.info(f"Successfully downloaded audio from Telegram: {len(audio_response.content)} bytes")
-            return audio_response.content
+        logging.info(f"Successfully downloaded audio from Telegram: {len(audio_response.content)} bytes")
+        return audio_response.content
     
-    except httpx.RequestError as e: # Catch httpx specific exceptions
+    except httpx.RequestError as e:
         logging.error(f"Error communicating with Telegram API for file_id {file_id}: {e}")
         return None
     except Exception as e:
@@ -179,11 +183,10 @@ async def send_telegram_message(chat_id: int, message_text: str):
     }
     
     try:
-        async with httpx_client as client: # Use the async client
-            response = await client.post(send_message_url, json=payload)
-            response.raise_for_status()
-            logging.info(f"Message sent to Telegram chat_id {chat_id}")
-    except httpx.RequestError as e: # Catch httpx specific exceptions
+        response = await telegram_httpx_client.post(send_message_url, json=payload)
+        response.raise_for_status()
+        logging.info(f"Message sent to Telegram chat_id {chat_id}")
+    except httpx.RequestError as e:
         logging.error(f"Error sending message to Telegram chat_id {chat_id}: {e}")
         logging.error(f"Telegram API Response Body: {response.text if response else 'No response'}")
     except Exception as e:
@@ -194,18 +197,11 @@ async def send_telegram_message(chat_id: int, message_text: str):
 def get_gemini_response(input_parts: list):
     """
     Generates a response from Gemini using the provided input parts (text and/or audio).
-    Note: The google.generativeai library itself is not inherently async.
-    For true concurrency with Gemini, you'd need to run this in a separate thread pool
-    or use an async version if one becomes available.
+    This function is synchronous and will be run in a thread pool.
     """
     try:
-        # We use gemini-1.5-flash because it's fast and supports audio input.
-        model = genai.GenerativeModel('gemini-1.5-flash') # Changed to 1.5-flash as per original prompt comments
-        
-        # Generate the content
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(input_parts)
-        
-        # Clean up the response to ensure it's a single block of text
         return response.text.strip()
         
     except Exception as e:
