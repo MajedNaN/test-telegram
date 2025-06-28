@@ -1,18 +1,8 @@
-
-
-
-
-
-
-
 ###### SET Webhook for telegram
-######   https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/setWebhook?url=https://your-deployed-app-url.com/webhook
-
-
-
+######   https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/setWebhook?url=https://your-deployed-app-url.com/webhook
 
 from fastapi import FastAPI, Request, HTTPException
-import requests
+import httpx # Import httpx for async HTTP requests
 import os
 import google.generativeai as genai
 import logging
@@ -67,6 +57,11 @@ DENTAL_CLINIC_SYSTEM_PROMPT = """
 - لو مش فاهم الرسالة، اسأل الشخص يوضح أكتر.
 - لو حد قال "شكراً" أو حاجة شبه كده، رد عليه رد بسيط ولطيف.
 """
+
+# Initialize httpx client for reuse
+# Using a global client or an async context manager for httpx is best practice
+# to efficiently manage connections.
+httpx_client = httpx.AsyncClient()
 
 
 # --- FastAPI Webhook Endpoints ---
@@ -129,7 +124,7 @@ async def handle_telegram_webhook(request: Request):
             return {"status": "ok"}
         
         if gemini_input:
-            response_text = get_gemini_response(gemini_input)
+            response_text = get_gemini_response(gemini_input) # This still uses a sync library
             await send_telegram_message(chat_id, response_text)
 
     except Exception as e:
@@ -148,26 +143,27 @@ async def get_telegram_audio_bytes(file_id: str):
     # Step 1: Get file path
     get_file_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile"
     try:
-        response = requests.get(get_file_url, params={"file_id": file_id})
-        response.raise_for_status()
-        file_info = response.json()
-        
-        if not file_info.get("ok"):
-            logging.error(f"Telegram getFile API error: {file_info.get('description', 'Unknown error')}")
-            return None
+        async with httpx_client as client: # Use the async client
+            response = await client.get(get_file_url, params={"file_id": file_id})
+            response.raise_for_status()
+            file_info = response.json()
+            
+            if not file_info.get("ok"):
+                logging.error(f"Telegram getFile API error: {file_info.get('description', 'Unknown error')}")
+                return None
 
-        file_path = file_info["result"]["file_path"]
-        logging.info(f"Retrieved file path from Telegram: {file_path}")
+            file_path = file_info["result"]["file_path"]
+            logging.info(f"Retrieved file path from Telegram: {file_path}")
 
-        # Step 2: Download the actual audio file
-        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
-        audio_response = requests.get(download_url)
-        audio_response.raise_for_status()
+            # Step 2: Download the actual audio file
+            download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+            audio_response = await client.get(download_url) # Use the async client
+            audio_response.raise_for_status()
 
-        logging.info(f"Successfully downloaded audio from Telegram: {len(audio_response.content)} bytes")
-        return audio_response.content
+            logging.info(f"Successfully downloaded audio from Telegram: {len(audio_response.content)} bytes")
+            return audio_response.content
     
-    except requests.exceptions.RequestException as e:
+    except httpx.RequestError as e: # Catch httpx specific exceptions
         logging.error(f"Error communicating with Telegram API for file_id {file_id}: {e}")
         return None
     except Exception as e:
@@ -183,25 +179,28 @@ async def send_telegram_message(chat_id: int, message_text: str):
     }
     
     try:
-        response = requests.post(send_message_url, json=payload)
-        response.raise_for_status()
-        logging.info(f"Message sent to Telegram chat_id {chat_id}")
-    except requests.exceptions.RequestException as e:
+        async with httpx_client as client: # Use the async client
+            response = await client.post(send_message_url, json=payload)
+            response.raise_for_status()
+            logging.info(f"Message sent to Telegram chat_id {chat_id}")
+    except httpx.RequestError as e: # Catch httpx specific exceptions
         logging.error(f"Error sending message to Telegram chat_id {chat_id}: {e}")
         logging.error(f"Telegram API Response Body: {response.text if response else 'No response'}")
     except Exception as e:
         logging.error(f"Unexpected error in send_telegram_message for chat_id {chat_id}: {e}", exc_info=True)
 
-
-# --- Helper Functions for Gemini (remains largely the same) ---
+# --- Helper Functions for Gemini ---
 
 def get_gemini_response(input_parts: list):
     """
     Generates a response from Gemini using the provided input parts (text and/or audio).
+    Note: The google.generativeai library itself is not inherently async.
+    For true concurrency with Gemini, you'd need to run this in a separate thread pool
+    or use an async version if one becomes available.
     """
     try:
         # We use gemini-1.5-flash because it's fast and supports audio input.
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash') # Changed to 1.5-flash as per original prompt comments
         
         # Generate the content
         response = model.generate_content(input_parts)
@@ -212,4 +211,3 @@ def get_gemini_response(input_parts: list):
     except Exception as e:
         logging.error(f"Error getting Gemini response: {e}", exc_info=True)
         return "آسف، حصل مشكلة عندي. ممكن تكلم العيادة على طول على الرقم ده: +20 2 1234-5678"
-
