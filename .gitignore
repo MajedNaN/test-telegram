@@ -1,2 +1,3 @@
 .vercel
 api/.env
+api/__pycache__
