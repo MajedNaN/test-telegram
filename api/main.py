@@ -132,7 +132,7 @@ async def get_gemini_response_async(input_parts: list):
     """
     try:
         # Use 'gemini-1.5-flash' for its speed and multimodal capabilities (text and audio).
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         # Call the generate_content_async method for asynchronous API interaction.
         response = await model.generate_content_async(input_parts)
         # Extract and return the generated text, stripping any leading/trailing whitespace.
