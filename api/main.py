@@ -33,7 +33,7 @@ from fastapi import FastAPI, Request, HTTPException
 
 
 #### for local ngrok
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 
 
 
@@ -56,7 +56,7 @@ from contextlib import asynccontextmanager # For FastAPI lifespan events
 
 
 #### for local ngrok
-load_dotenv()
+# load_dotenv()
 
 
 
