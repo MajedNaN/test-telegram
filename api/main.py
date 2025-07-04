@@ -7,7 +7,7 @@
 
 ###### SET Webhook for telegram
 ######   https://api.telegram.org/bot<YOUR_TELEGRAM_BOT_TOKEN>/setWebhook?url=https://your-deployed-app-url.com/webhook
-######   https://api.telegram.org/bot8141958410:AAHqHtPoUsM7ei3JOB7maFniUEFVcAamm6Q/setWebhook?url=https://11b3-41-45-64-65.ngrok-free.app/webhook
+######   https://api.telegram.org/bot8141958410:AAHqHtPoUsM7ei3JOB7maFniUEFVcAamm6Q/setWebhook?url=https://telegramrailway-production.up.railway.app/webhook
 
 
 
