@@ -33,7 +33,7 @@ from fastapi import FastAPI, Request, HTTPException
 
 
 #### for local ngrok
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 
 
 
@@ -56,7 +56,7 @@ from contextlib import asynccontextmanager # For FastAPI lifespan events
 
 
 #### for local ngrok
-load_dotenv()
+# load_dotenv()
 
 
 
@@ -195,38 +195,38 @@ async def handle_unsupported_message(message: Message):
     logging.info(f"Received unsupported message type from {message.chat.id}: {message.content_type}. Replying with a standard message.")
     await message.reply("أنا أسف، أنا بفهم الرسائل النصية والصوتية بس.")
 
-# --- FastAPI Lifespan Events ---
-# This context manager handles startup and shutdown logic for the FastAPI application.
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    FastAPI lifespan context manager for handling startup and shutdown events.
-    This replaces the aiohttp-specific on_startup and on_shutdown functions.
-    """
-    # Changed webhook_path to a generic one without the token
-    webhook_path = "/webhook"
-    webhook_url = f"{WEBHOOK_URL}{webhook_path}"
-    logging.info(f"Setting webhook to: {webhook_url}")
-    # Set the webhook when the FastAPI app starts
-    await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
-    logging.info("Webhook set successfully.")
+# # --- FastAPI Lifespan Events ---
+# # This context manager handles startup and shutdown logic for the FastAPI application.
+# @asynccontextmanager
+# async def lifespan(app: FastAPI):
+#     """
+#     FastAPI lifespan context manager for handling startup and shutdown events.
+#     This replaces the aiohttp-specific on_startup and on_shutdown functions.
+#     """
+#     # Changed webhook_path to a generic one without the token
+#     webhook_path = "/webhook"
+#     webhook_url = f"{WEBHOOK_URL}{webhook_path}"
+#     logging.info(f"Setting webhook to: {webhook_url}")
+#     # Set the webhook when the FastAPI app starts
+#     await bot.set_webhook(url=webhook_url, drop_pending_updates=True)
+#     logging.info("Webhook set successfully.")
     
-    # Start polling for updates in the background if you want to run without webhooks
-    # or if you want to ensure updates are processed even if webhook fails
-    # asyncio.create_task(dp.start_polling(bot))
+#     # Start polling for updates in the background if you want to run without webhooks
+#     # or if you want to ensure updates are processed even if webhook fails
+#     # asyncio.create_task(dp.start_polling(bot))
 
-    yield # This yields control to the FastAPI application to start serving requests
+#     yield # This yields control to the FastAPI application to start serving requests
 
-    # This code runs when the FastAPI app is shutting down
-    logging.info("Deleting webhook...")
-    await bot.delete_webhook()
-    logging.info("Webhook deleted successfully.")
-    # Stop the dispatcher gracefully
-    await dp.stop_polling()
+#     # This code runs when the FastAPI app is shutting down
+#     logging.info("Deleting webhook...")
+#     await bot.delete_webhook()
+#     logging.info("Webhook deleted successfully.")
+#     # Stop the dispatcher gracefully
+#     await dp.stop_polling()
 
 
 # Create the FastAPI application instance, integrating the lifespan events.
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 # --- FastAPI Webhook Endpoint ---
 # Changed the endpoint path to a generic one without the token
